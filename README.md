@@ -73,6 +73,31 @@ A production-ready, full-featured WhatsApp clone backend built with **Node.js**,
 - **Offline Detection**: Auto-replies only trigger when user is offline
 - **2-Second Delay**: Natural response timing for realistic auto-replies
 
+### 📞 Call Features (NEW)
+- **Voice Calls**: Real-time voice calling using WebRTC
+- **Video Calls**: HD video calling with camera switching
+- **Screen Sharing**: Share screen during video calls
+- **Call States**: 
+  - Ringing
+  - Connected
+  - Ended
+  - Missed
+  - Rejected
+- **Multi-Device Support**: Handle calls across different devices
+- **Call History**: Track all calls with duration and type
+- **Quality Controls**:
+  - Mute/Unmute
+  - Video On/Off
+  - Speaker Toggle
+- **Call Security**:
+  - Encrypted connections
+  - Participant verification
+  - TURN server support
+- **Error Handling**:
+  - Connection loss recovery
+  - Device permission handling
+  - Fallback mechanisms
+
 ## 🛠️ Technologies Used
 
 ### Backend Framework & Runtime
@@ -177,6 +202,11 @@ GEMINI_API_KEY=your_gemini_api_key
 
 # Optional: Frontend URL for CORS
 CLIENT_URL=http://localhost:3000
+
+# TURN Server (for WebRTC calls)
+TURN_SERVER_URL=turn:your-server:3478
+TURN_USERNAME=username
+TURN_PASSWORD=password
 ```
 
 ### 4. Run the server
@@ -313,6 +343,44 @@ GET /api/ai/suggestions/conv123
 }
 ```
 
+### Call Routes (`/api/calls`) - NEW
+
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| POST | `/` | Initiate a voice/video call | Yes |
+| POST | `/accept` | Accept an incoming call | Yes |
+| POST | `/reject` | Reject an incoming call | Yes |
+| POST | `/end` | End an ongoing call | Yes |
+| POST | `/webrtc/offer` | Send WebRTC offer | Yes |
+| POST | `/webrtc/answer` | Send WebRTC answer | Yes |
+| POST | `/webrtc/ice-candidate` | Send ICE candidate | Yes |
+
+**Example Request (Initiate Call):**
+```json
+POST /api/calls
+{
+  "recipientId": "user456",
+  "callType": "video"
+}
+```
+
+**Example Request (Accept Call):**
+```json
+POST /api/calls/accept
+{
+  "callId": "call789"
+}
+```
+
+**Example Request (Send WebRTC Offer):**
+```json
+POST /api/calls/webrtc/offer
+{
+  "recipientId": "user456",
+  "offer": "v=0..."
+}
+```
+
 ## 🔌 Socket.IO Events
 
 ### Client → Server Events
@@ -327,6 +395,13 @@ GET /api/ai/suggestions/conv123
 | `typing-stopped` | `conversationId` | User stops typing |
 | `join-conversation` | `conversationId` | Join conversation room |
 | `leave-conversation` | `conversationId` | Leave conversation room |
+| `call:initiate` | `{ recipientId, callType }` | Start a new call |
+| `call:accept` | `{ callId }` | Accept incoming call |
+| `call:reject` | `{ callId, reason }` | Reject incoming call |
+| `call:end` | `{ callId }` | End ongoing call |
+| `webrtc:offer` | `{ recipientId, offer }` | Send WebRTC offer |
+| `webrtc:answer` | `{ callerId, answer }` | Send WebRTC answer |
+| `webrtc:ice-candidate` | `{ userId, candidate }` | Send ICE candidate |
 
 ### Server → Client Events
 
@@ -339,6 +414,13 @@ GET /api/ai/suggestions/conv123
 | `user-stopped-typing` | `{ userId, conversationId }` | User stopped typing |
 | `update-online-users` | `[userIds]` | Online users list updated |
 | `message-error` | `{ error }` | Error occurred |
+| `call:incoming` | `{ callerId, callType }` | Receive incoming call |
+| `call:accepted` | `{ callId }` | Call was accepted |
+| `call:rejected` | `{ callId, reason }` | Call was rejected |
+| `call:ended` | `{ callId, reason }` | Call has ended |
+| `webrtc:offer` | `{ callerId, offer }` | Receive WebRTC offer |
+| `webrtc:answer` | `{ recipientId, answer }` | Receive WebRTC answer |
+| `webrtc:ice-candidate` | `{ userId, candidate }` | Receive ICE candidate |
 
 ### Socket Authentication
 Socket connections require JWT authentication via:
@@ -408,6 +490,91 @@ Socket connections require JWT authentication via:
   deletedAt: Date,
   timestamps: true
 }
+```
+
+### Call Model
+```javascript
+{
+  caller: ObjectId (required, ref: User),
+  recipient: ObjectId (required, ref: User),
+  type: String (enum: voice/video),
+  status: String (enum: ringing/connected/ended/missed/rejected),
+  startTime: Date,
+  endTime: Date,
+  duration: Number,
+  endReason: String (enum: completed/cancelled/missed/error),
+  timestamps: true
+}
+```
+### 📞 WebRTC Call Features
+- **Real-time Calls**
+  - Voice calls using WebRTC
+  - Video calls with peer-to-peer connection
+  - ICE candidate exchange
+  - Call signaling through Socket.IO
+
+- **Call States**
+  - Call initiation
+  - Call acceptance/rejection
+  - Call termination
+  - Busy handling
+  - Timeout management
+
+- **WebRTC Events**
+  | Event | Description |
+  |-------|-------------|
+  | `call:initiate` | Initiate voice/video call |
+  | `call:accept` | Accept incoming call |
+  | `call:reject` | Reject incoming call |
+  | `call:end` | End ongoing call |
+  | `webrtc:offer` | Send WebRTC offer |
+  | `webrtc:answer` | Send WebRTC answer |
+  | `webrtc:ice-candidate` | Exchange ICE candidates |
+
+- **Call Security**
+  - Participant verification
+  - Socket authentication
+  - Secure peer connections
+
+### Socket Events for Calls
+
+```javascript
+// Call Management
+socket.emit('call:initiate', { recipientId, callType });
+socket.emit('call:accept', { callerId });
+socket.emit('call:reject', { callerId, reason });
+socket.emit('call:end', { recipientId });
+
+// WebRTC Signaling
+socket.emit('webrtc:offer', { recipientId, offer });
+socket.emit('webrtc:answer', { recipientId, answer });
+socket.emit('webrtc:ice-candidate', { recipientId, candidate });
+```
+
+### Helper Functions
+```javascript
+// User Socket Management
+const getUserSockets = (userId) => {
+  return [...io.sockets.sockets.values()].filter(
+    socket => socket.user?._id.toString() === userId.toString()
+  );
+};
+
+// Validation
+const isValidObjectId = (id) => {
+  return mongoose.Types.ObjectId.isValid(id);
+};
+
+// Authorization
+const checkParticipation = async (conversationId, userId) => {
+  const conversation = await Conversation.findById(conversationId);
+  return conversation?.participants.includes(userId);
+};
+
+// Online Status
+const isUserOnline = (userId) => {
+  return onlineUsers.has(userId.toString());
+};
 ```
 
 ## 🤖 AI Auto-Reply Usage
@@ -528,8 +695,9 @@ Make sure to:
 - [ ] Test auto-reply (enable, send message while offline)
 - [ ] Test AI chat
 - [ ] Test smart suggestions
+- [ ] Test voice/video calls
 
-## 📝 Environment Variables Reference
+## Environment Variables Reference
 
 | Variable | Required | Description | Example |
 |----------|----------|-------------|---------|
@@ -543,6 +711,9 @@ Make sure to:
 | `CLOUDINARY_API_SECRET` | Yes | Cloudinary API secret | `abc123def456` |
 | `GEMINI_API_KEY` | Yes | Google Gemini API key | `AIza...` |
 | `CLIENT_URL` | No | Frontend URL for CORS | `http://localhost:3000` |
+| `TURN_SERVER_URL` | Yes | TURN server URL | `turn:your-server:3478` |
+| `TURN_USERNAME` | Yes | TURN server username | `username` |
+| `TURN_PASSWORD` | Yes | TURN server password | `password` |
 
 ## 🚀 Deployment
 

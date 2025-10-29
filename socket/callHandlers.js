@@ -1,6 +1,7 @@
 // backend/socket/callHandlers.js
 import Conversation from "../models/Conversation.js";
 import mongoose from "mongoose";
+import Call from '../models/Call.js';
 
 export default function registerCallHandlers(io, socket, onlineUsers) {
   const getUserSockets = (userId) => {
@@ -62,6 +63,13 @@ export default function registerCallHandlers(io, socket, onlineUsers) {
         });
       }
 
+      // Create call record
+      const call = await Call.create({
+        caller: callerId,
+        recipient: recipientId,
+        type: callType
+      });
+
       // Get caller info
       const callerInfo = {
         userId: callerId,
@@ -73,6 +81,7 @@ export default function registerCallHandlers(io, socket, onlineUsers) {
       const recipientSockets = getUserSockets(recipientId);
       recipientSockets.forEach((socketId) => {
         io.to(socketId).emit("call:incoming", {
+          callId: call._id,
           callerId: callerId,
           callerName: callerInfo.name,
           callerAvatar: callerInfo.avatarUrl,
@@ -334,6 +343,19 @@ export default function registerCallHandlers(io, socket, onlineUsers) {
 
     } catch (error) {
       console.error("❌ Socket call:busy error:", error);
+    }
+  });
+
+  // Call status updates
+  socket.on('call:ended', async ({ callId, reason }) => {
+    try {
+      await Call.findByIdAndUpdate(callId, {
+        status: 'ended',
+        endTime: new Date(),
+        endReason: reason
+      });
+    } catch (error) {
+      console.error('Error updating call status:', error);
     }
   });
 }
