@@ -1,46 +1,57 @@
+import mongoose from "mongoose";
 import Message from "../models/Message.js";
 import User from "../models/User.js";
-import Conversation from "../models/Conversation.js";
+import  Conversation  from "../models/Conversation.js";
+import { isValidObjectId } from "mongoose";
 
 //Creating 1 to 1 Conversation
 export const createConversation = async (req, res) => {
-  const userId = req.user._id.toString();
-  const { recipientId } = req.body;
   try {
-    if (!recipientId)
-      return res.status(400).json({ msg: "Recipient ID is required" });
+    const { userId } = req.body;
+    const authUser = req.user._id;
 
-    if (recipientId === userId)
-      return res
-        .status(400)
-        .json({ msg: "Cannot start conversation with yourself" });
-    const existingConversation = await Conversation.findOne({
-      isGroup: false,
-      participants: { $all: [userId, recipientId] },
-    });
-    if (existingConversation) {
-      const populated = await existingConversation.populate(
-        "participants",
-        "name avatarUrl email"
-      );
-      return res.status(200).json(populated);
+    // Validate input
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: "Invalid user ID provided" });
     }
 
-    const newConversation = await Conversation.create({
-      participants: [userId, recipientId],
+    // Check if users are different
+    if (userId === authUser.toString()) {
+      return res.status(400).json({ error: "Cannot create conversation with yourself" });
+    }
+
+    // Check if conversation exists
+    const existingConversation = await Conversation.findOne({
       isGroup: false,
-      lastMessage: null,
+      participants: {
+        $all: [authUser, userId],
+        $size: 2,
+      },
+    }).populate("participants", "name email avatar");
+
+    if (existingConversation) {
+      console.log("Found existing conversation:", existingConversation);
+      return res.json(existingConversation);
+    }
+
+    // Create new conversation
+    const newConversation = await Conversation.create({
+      participants: [authUser, userId],
+      isGroup: false,
     });
 
-    const populated = await newConversation.populate(
-      "participants",
-      "name avatarUrl email"
-    );
+    // Populate and return
+    const populatedConversation = await Conversation.findById(newConversation._id)
+      .populate("participants", "name email avatar");
 
-    return res.status(201).json(populated);
+    console.log("Created new conversation:", populatedConversation);
+    return res.status(201).json(populatedConversation);
   } catch (error) {
-    console.error("CreateConversation Error:", error);
-    res.status(500).json({ msg: "Server error" });
+    console.error("Create conversation error:", error);
+    return res.status(500).json({
+      error: "Failed to create conversation",
+      details: error.message,
+    });
   }
 };
 
@@ -146,7 +157,9 @@ export const addParticipants = async (req, res) => {
     }
 
     // 3️⃣ Check if logged-in user is admin
-    const isAdmin = conversation.groupAdmins.some(adminId => adminId.toString() === userId);
+    const isAdmin = conversation.groupAdmins.some(
+      (adminId) => adminId.toString() === userId
+    );
     if (!isAdmin) {
       return res.status(403).send("Only admin can add participants");
     }
@@ -158,7 +171,9 @@ export const addParticipants = async (req, res) => {
     }
 
     // 5️⃣ Filter out users already in the group
-    const existingParticipantIds = conversation.participants.map(p => p.toString());
+    const existingParticipantIds = conversation.participants.map((p) =>
+      p.toString()
+    );
     const newParticipants = participants.filter(
       (id) => !existingParticipantIds.includes(id)
     );
@@ -199,7 +214,9 @@ export const removeParticipants = async (req, res) => {
     }
 
     // 3️⃣ Check if logged-in user is admin
-    const isAdmin = conversation.groupAdmins.some(adminId => adminId.toString() === userId);
+    const isAdmin = conversation.groupAdmins.some(
+      (adminId) => adminId.toString() === userId
+    );
     if (!isAdmin) {
       return res.status(403).send("Only admin can remove participants");
     }
@@ -254,7 +271,9 @@ export const changeGroupAdmin = async (req, res) => {
     }
 
     // 3️⃣ Verify current user is admin
-    const isAdmin = conversation.groupAdmins.some(adminId => adminId.toString() === userId);
+    const isAdmin = conversation.groupAdmins.some(
+      (adminId) => adminId.toString() === userId
+    );
     if (!isAdmin) {
       return res
         .status(403)
@@ -272,7 +291,11 @@ export const changeGroupAdmin = async (req, res) => {
     }
 
     // 5️⃣ Update group admin (add to admins array if not already there)
-    if (!conversation.groupAdmins.some(adminId => adminId.toString() === newAdminId)) {
+    if (
+      !conversation.groupAdmins.some(
+        (adminId) => adminId.toString() === newAdminId
+      )
+    ) {
       conversation.groupAdmins.push(newAdminId);
       await conversation.save();
     }
@@ -315,7 +338,9 @@ export const renameGroup = async (req, res) => {
     }
 
     // 3️⃣ Verify current user is admin
-    const isAdmin = conversation.groupAdmins.some(adminId => adminId.toString() === userId);
+    const isAdmin = conversation.groupAdmins.some(
+      (adminId) => adminId.toString() === userId
+    );
     if (!isAdmin) {
       return res
         .status(403)
@@ -364,7 +389,9 @@ export const changeGroupAvatar = async (req, res) => {
     }
 
     // 3️⃣ Verify admin
-    const isAdmin = conversation.groupAdmins.some(adminId => adminId.toString() === userId);
+    const isAdmin = conversation.groupAdmins.some(
+      (adminId) => adminId.toString() === userId
+    );
     if (!isAdmin) {
       return res
         .status(403)

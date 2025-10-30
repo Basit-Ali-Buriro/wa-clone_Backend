@@ -29,110 +29,38 @@ export default function registerMessageHandlers(io, socket, onlineUsers) {
     
     return conversation;
   };
-
-  socket.on("send-message", async (messageData) => {
-    try {
-      const { conversationId, text, media } = messageData;
-      const senderId = socket.userId;
-
-      console.log("📨 Received message:", { conversationId, text, senderId });
-
-      if (!isValidObjectId(conversationId)) {
-        throw new Error("Invalid conversation ID");
-      }
-
-      const conversation = await checkParticipation(conversationId, senderId);
-
-      const newMessage = await Message.create({
-        conversation: conversationId,
-        sender: senderId,
-        text: text || "",
-        media: media || [],
-      });
-
-      const populatedMessage = await newMessage.populate([
-        {
-          path: "sender",
-          select: "name email avatarUrl"
-        }
-      ]);
-
-      await Conversation.findByIdAndUpdate(conversationId, {
-        lastMessage: newMessage._id,
-        updatedAt: new Date()
-      });
-
-      conversation.participants.forEach((participantId) => {
-        const participantSockets = getUserSockets(participantId.toString());
-        participantSockets.forEach((socketId) => {
-          io.to(socketId).emit("new-message", {
-            message: populatedMessage,
-            conversationId
-          });
-        });
-      });
-
-      const otherParticipants = conversation.participants.filter(
-        p => p.toString() !== senderId.toString()
-      );
-
-      for (const participantId of otherParticipants) {
-        const participant = await User.findById(participantId);
-        
-        if (participant?.autoReply?.enabled) {
-          const participantSockets = getUserSockets(participantId.toString());
-          const isOnline = participantSockets.size > 0;
-          
-          if (!isOnline) {
-            try {
-              const autoReplyText = await generateAutoReply(
-                participantId.toString(),
-                text,
-                conversationId
-              );
-
-              if (autoReplyText) {
-                setTimeout(async () => {
-                  const autoReplyMessage = await Message.create({
-                    conversation: conversationId,
-                    sender: participantId,
-                    text: autoReplyText,
-                    media: [],
-                  });
-
-                  const populatedAutoReply = await autoReplyMessage.populate([
-                    { path: "sender", select: "name email avatarUrl" }
-                  ]);
-
-                  await Conversation.findByIdAndUpdate(conversationId, {
-                    lastMessage: autoReplyMessage._id,
-                    updatedAt: new Date()
-                  });
-
-                  conversation.participants.forEach((pid) => {
-                    const sockets = getUserSockets(pid.toString());
-                    sockets.forEach((socketId) => {
-                      io.to(socketId).emit("new-message", {
-                        message: populatedAutoReply,
-                        conversationId,
-                        isAutoReply: true
-                      });
-                    });
-                  });
-                }, 2000);
-              }
-            } catch (autoReplyError) {
-              console.error("Auto-reply error:", autoReplyError);
-            }
-          }
-        }
-      }
-
-    } catch (error) {
-      console.error("❌ Socket send-message error:", error);
-      socket.emit("message-error", { error: error.message });
+socket.on('send-message', async (data) => {
+  try {
+    console.log('📨 Received message:', data);
+    
+    const conversationId = data.conversationId;
+    const text = data.text;
+    const senderId = data.senderId || socket.userId;
+    const fullMessage = data.message;
+    
+    if (!conversationId || !text) {
+      console.error('❌ Invalid message data');
+      return socket.emit('message-error', { error: 'Invalid message data' });
     }
-  });
+    
+    console.log('✅ Broadcasting message to conversation:', conversationId);
+    
+    // ✅ FIX: Broadcast to conversation room EXCEPT the sender
+    // Use socket.to() instead of io.to() to exclude sender
+    socket.to(conversationId).emit('new-message', {
+      conversationId: conversationId,
+      message: fullMessage
+    });
+    
+    // DO NOT emit back to sender - they already added it optimistically
+    
+    console.log('📢 Message sent to other participants (excluding sender)');
+    
+  } catch (error) {
+    console.error('❌ Socket send-message error:', error);
+    socket.emit('message-error', { error: error.message });
+  }
+});
 
   socket.on("message-edited", async (data) => {
     try {

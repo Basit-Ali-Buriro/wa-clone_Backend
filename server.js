@@ -15,43 +15,52 @@ import userRoutes from './routes/userRoutes.js';
 
 dotenv.config();
 connectDB();
+
+// ✅ Get client URL from env or use default
 const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
+
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
+
 // ✅ FIXED CORS CONFIGURATION
 const corsOptions = {
-  origin: process.env.CLIENT_URL || "http://localhost:5173", // ✅ Specific origin, not wildcard
-  credentials: true, // ✅ Allow credentials (cookies, authorization headers)
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // ✅ Allowed methods
-  allowedHeaders: ["Content-Type", "Authorization"], // ✅ Allowed headers
-  exposedHeaders: ["set-cookie"], // ✅ Expose cookies
+  origin: CLIENT_URL, // ✅ Changed from "*" to specific origin
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  exposedHeaders: ["set-cookie"],
   optionsSuccessStatus: 200
 };
 
 app.use(cors(corsOptions));
 
-// ✅ Handle preflight requests
+// Routes
 app.use("/api/ai", aiRoutes);
 app.use("/api/auth", authRoutes);
 app.use('/api/users', userRoutes);
 app.use("/api/conversations", conversationRoutes);
 app.use("/api/messages", messageRoutes);
 
-app.get('/', (req, res)=>{
-  res.send(`Api working`);
+app.get('/', (req, res) => {
+  res.send('API working');
 });
 
 const server = http.createServer(app);
 
+// ✅ FIXED Socket.IO CORS
 const io = new Server(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
+    origin: CLIENT_URL, // ✅ Changed from "*" to specific origin
+    credentials: true,  // ✅ Added credentials
+    methods: ["GET", "POST"]
+  }
 });
 
 setupSocket(io);
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server running on port ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
+  console.log(`✅ CORS enabled for: ${CLIENT_URL}`);
+});
