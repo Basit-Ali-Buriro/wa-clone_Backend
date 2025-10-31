@@ -1,6 +1,7 @@
 import Conversation from "../models/Conversation.js";
 import User from "../models/User.js";
 import Message from "../models/Message.js";
+import mongoose from "mongoose";
 
 const checkParticipation = async (conversationId, userId) => {
   const conversation = await Conversation.findById(conversationId);
@@ -209,26 +210,23 @@ export const deleteMessageForMe = async (req, res) => {
 };
 
 export const deleteMessageForEveryone = async (req, res) => {
-  const { messageId } = req.params;
+  const { id } = req.params; // ✅ Use 'id' to match route
   const userId = req.user._id.toString();
 
   try {
-    const message = await Message.findById(messageId);
+    const message = await Message.findById(id);
     if (!message) return res.status(404).json({ msg: "Message not found" });
 
     await checkParticipation(message.conversation, userId);
 
-    if (userId !== message.sender.toString())
-      return res.status(403).send("Unauthorized User");
+    if (userId !== message.sender.toString()) {
+      return res.status(403).send("Only the sender can delete for everyone");
+    }
 
-    message.text = "";
-    message.media = [];
-    message.isDeletedForEveryone = true;
-    message.deletedAt = new Date();
+    // ✅ Actually delete the message
+    await Message.findByIdAndDelete(id);
 
-    await message.save();
-
-    return res.json({ success: true, messageId });
+    return res.json({ success: true, messageId: id });
   } catch (error) {
     console.error("DeleteForEveryone Error:", error);
     if (error.message === "You are not a participant of this conversation") {
@@ -288,46 +286,80 @@ export const replyToMessage = async (req, res) => {
   }
 };
 
+// ✅ FORWARD MESSAGE (FIXED)
 export const forwardMessage = async (req, res) => {
-  const originalMessageId = req.params.id;
-  const { targetConversationId } = req.body;
-  const userId = req.user._id;
-
   try {
-    if (!originalMessageId || !targetConversationId)
-      return res.status(400).send("Required data missing");
+    const originalMessageId = req.params.id;
 
-    const conversation = await checkParticipation(targetConversationId, userId);
+    // ✅ Accept 'conversationId' from frontend
+    const { conversationId } = req.body;
+    const userId = req.user._id;
 
+    console.log('========================================');
+    console.log('📤 FORWARD MESSAGE');
+    console.log('========================================');
+    console.log('Original Message ID:', originalMessageId);
+    console.log('Target Conversation ID:', conversationId);
+    console.log('User:', userId);
+
+    if (!originalMessageId || !conversationId) {
+      console.error('❌ Missing required IDs');
+      return res.status(400).json({ msg: "Required data missing (messageId and conversationId)" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(originalMessageId) || !mongoose.Types.ObjectId.isValid(conversationId)) {
+      console.error('❌ Invalid ObjectId format');
+      return res.status(400).json({ msg: "Invalid ID format" });
+    }
+
+    // Verify user is participant of target conversation
+    const targetConversation = await checkParticipation(conversationId, userId);
+    console.log('✅ User is participant of target conversation');
+
+    // Find original message
     const message = await Message.findById(originalMessageId);
-    if (!message) return res.status(404).send("Message not found");
+    if (!message) {
+      console.error('❌ Original message not found');
+      return res.status(404).json({ msg: "Message not found" });
+    }
 
+    // Verify user is participant of original conversation
     await checkParticipation(message.conversation, userId);
+    console.log('✅ User is participant of original conversation');
 
+    // Create new forwarded message
+    console.log('💾 Creating new forwarded message...');
     const newMessage = await Message.create({
-      conversation: targetConversationId,
+      conversation: conversationId,
       sender: userId,
       text: message.text,
       media: message.media,
       forwarded: true,
       forwardedFrom: message.sender,
     });
+    console.log('✅ New message created:', newMessage._id);
 
-    conversation.lastMessage = newMessage._id;
-    await conversation.save();
+    // Update last message of target conversation
+    targetConversation.lastMessage = newMessage._id;
+    await targetConversation.save();
+    console.log('✅ Target conversation updated');
 
+    // Populate and return new message
     const populated = await newMessage.populate([
       { path: "sender", select: "name avatarUrl" },
       { path: "forwardedFrom", select: "name avatarUrl" },
     ]);
 
+    console.log('✅ Message forwarded successfully');
+    console.log('========================================');
+
     return res.status(201).json(populated);
   } catch (error) {
-    console.error("ForwardMessage Error:", error);
+    console.error("❌ ForwardMessage Error:", error);
     if (error.message === "You are not a participant of this conversation") {
       return res.status(403).json({ msg: error.message });
     }
-    return res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error", error: error.message });
   }
 };
 

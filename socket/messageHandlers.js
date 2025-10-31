@@ -2,7 +2,6 @@ import Message from "../models/Message.js";
 import Conversation from "../models/Conversation.js";
 import User from "../models/User.js";
 import mongoose from "mongoose";
-import { generateAutoReply } from "../controllers/aiControllers.js";
 
 export default function registerMessageHandlers(io, socket, onlineUsers) {
   const getUserSockets = (userId) => {
@@ -29,39 +28,85 @@ export default function registerMessageHandlers(io, socket, onlineUsers) {
     
     return conversation;
   };
-socket.on('send-message', async (data) => {
+
+  // ==========================================
+  // 📨 SEND MESSAGE (FIXED)
+  // ==========================================
+ socket.on('send-message', async (data) => {
   try {
-    console.log('📨 Received message:', data);
+    console.log('========================================');
+    console.log('📨 SEND MESSAGE EVENT');
+    console.log('========================================');
+    console.log('From user:', socket.userId);
+    console.log('Data received:', data);
     
-    const conversationId = data.conversationId;
-    const text = data.text;
-    const senderId = data.senderId || socket.userId;
-    const fullMessage = data.message;
+    const { conversationId, text } = data;
     
-    if (!conversationId || !text) {
+    // Validate
+    if (!conversationId || !text?.trim()) {
       console.error('❌ Invalid message data');
       return socket.emit('message-error', { error: 'Invalid message data' });
     }
-    
-    console.log('✅ Broadcasting message to conversation:', conversationId);
-    
-    // ✅ FIX: Broadcast to conversation room EXCEPT the sender
-    // Use socket.to() instead of io.to() to exclude sender
-    socket.to(conversationId).emit('new-message', {
-      conversationId: conversationId,
-      message: fullMessage
+
+    if (!isValidObjectId(conversationId)) {
+      console.error('❌ Invalid conversation ID format');
+      return socket.emit('message-error', { error: 'Invalid conversation ID' });
+    }
+
+    // Verify user is participant
+    const conversation = await checkParticipation(conversationId, socket.userId);
+    console.log('✅ User is participant of conversation');
+
+    // Create message in database
+    console.log('💾 Creating message in database...');
+    const newMessage = await Message.create({
+      sender: socket.userId,
+      conversation: conversationId,
+      text: text.trim(),
     });
+
+    // Populate sender info
+    await newMessage.populate('sender', 'name email avatarUrl');
+    console.log('✅ Message created:', newMessage._id);
+
+    // Update conversation's last message
+    conversation.lastMessage = newMessage._id;
+    await conversation.save();
+    console.log('✅ Conversation last message updated');
+
+    // Prepare message data
+    const messageData = {
+      message: newMessage,
+      conversationId: conversationId,
+    };
+
+    console.log('📢 Broadcasting message...');
     
-    // DO NOT emit back to sender - they already added it optimistically
+    // ✅ OPTION 1: Broadcast to room (everyone in the conversation)
+    io.to(conversationId).emit('new-message', messageData);
     
-    console.log('📢 Message sent to other participants (excluding sender)');
-    
+    // ✅ Also send to sender's other sockets (multi-device support)
+    const senderSockets = getUserSockets(socket.userId);
+    senderSockets.forEach((socketId) => {
+      io.to(socketId).emit('new-message', messageData);
+    });
+
+    console.log('✅ Message broadcast complete');
+    console.log('========================================');
+
   } catch (error) {
-    console.error('❌ Socket send-message error:', error);
+    console.error('========================================');
+    console.error('❌ SEND MESSAGE ERROR');
+    console.error('========================================');
+    console.error('Error:', error);
+    console.error('========================================');
     socket.emit('message-error', { error: error.message });
   }
 });
 
+  // ==========================================
+  // ✏️ EDIT MESSAGE
+  // ==========================================
   socket.on("message-edited", async (data) => {
     try {
       const { messageId, newText } = data;
@@ -99,12 +144,17 @@ socket.on('send-message', async (data) => {
           });
         });
       });
+
+      console.log('✏️ Message edited:', messageId);
     } catch (error) {
       console.error("❌ Socket message-edited error:", error);
       socket.emit("message-error", { error: error.message });
     }
   });
 
+  // ==========================================
+  // 🗑️ DELETE MESSAGE
+  // ==========================================
   socket.on("message-deleted", async (data) => {
     try {
       const { messageId, deleteType } = data;
@@ -122,7 +172,7 @@ socket.on('send-message', async (data) => {
 
       const conversation = await Conversation.findById(message.conversation);
 
-      if (deleteType === "everyone") {
+      if (deleteType === "everyone" || deleteType === "forEveryone") {
         if (message.sender.toString() !== socket.userId) {
           throw new Error("Only sender can delete for everyone");
         }
@@ -138,6 +188,8 @@ socket.on('send-message', async (data) => {
             });
           });
         });
+
+        console.log('🗑️ Message deleted for everyone:', messageId);
       }
     } catch (error) {
       console.error("❌ Socket message-deleted error:", error);
@@ -145,18 +197,19 @@ socket.on('send-message', async (data) => {
     }
   });
 
+  // ==========================================
+  // 😊 REACT TO MESSAGE
+  // ==========================================
   socket.on("message-reaction", async (data) => {
     try {
       const { messageId, emoji } = data;
       const userId = socket.userId;
 
       if (!isValidObjectId(messageId)) {
-        console.error("Invalid messageId received:", messageId);
         throw new Error("Invalid message ID format");
       }
 
       const message = await Message.findById(messageId);
-      
       if (!message) {
         throw new Error("Message not found");
       }
@@ -193,12 +246,17 @@ socket.on('send-message', async (data) => {
           });
         });
       });
+
+      console.log('😊 Reaction toggled:', emoji, 'on message:', messageId);
     } catch (error) {
       console.error("❌ Socket message-reaction error:", error);
       socket.emit("message-error", { error: error.message });
     }
   });
 
+  // ==========================================
+  // ✍️ TYPING INDICATORS
+  // ==========================================
   socket.on("typing-started", async (conversationId) => {
     try {
       if (!isValidObjectId(conversationId)) {
@@ -219,6 +277,8 @@ socket.on('send-message', async (data) => {
           });
         }
       });
+
+      console.log('✍️ User typing:', socket.userId);
     } catch (error) {
       console.error("❌ Socket typing-started error:", error);
     }
@@ -243,11 +303,16 @@ socket.on('send-message', async (data) => {
           });
         }
       });
+
+      console.log('✍️ User stopped typing:', socket.userId);
     } catch (error) {
       console.error("❌ Socket typing-stopped error:", error);
     }
   });
 
+  // ==========================================
+  // 🚪 JOIN/LEAVE CONVERSATION
+  // ==========================================
   socket.on("join-conversation", async (conversationId) => {
     try {
       await checkParticipation(conversationId, socket.userId);
